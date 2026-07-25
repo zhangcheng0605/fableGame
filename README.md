@@ -132,6 +132,10 @@ devices get a card explaining the game needs a keyboard.
 `build.mjs` also emits `web/play.html`, the same game minus the `<meta>` tags, for hosts that
 supply their own document shell.
 
+Running on a portfolio site, framed by the host page rather than fullscreen:
+
+![the game embedded in a portfolio page](tools/shots/embedded-on-site.png)
+
 ## Screenshots
 
 | | |
