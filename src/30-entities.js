@@ -230,7 +230,7 @@ PI.Entities = (function () {
       sinePhase: U.rand(0, TAU), sineAmp: 0,      // halluc drift
       dashT: 0, dashTimer: 0, dashing: false, dashProg: 0, dashPrev: 0,
       dashDX: 0, dashDY: 0, dashDir: (Math.random() < 0.5 ? -1 : 1),
-      dashX0: 0, dashY0: 0,
+      dashX0: 0, dashY0: 0, dashCount: 0,
       pulse: 0, sparkT: 0,
       popIndex: -1, popT: 99, typedSeen: 0,       // per-letter consume pop (§11)
       shakeT: 0,                                  // Game.typo(e) may set this
@@ -317,7 +317,8 @@ PI.Entities = (function () {
     for (let i = 0; i < n; i++) {
       const word = chooseWord('swarm', pending);
       pending.push(word);
-      const off = (n > 1) ? (i / (n - 1) - 0.5) * spread : 0;
+      // span + jitter stays inside `spread` so the cluster is truly within 150px
+      const off = (n > 1) ? (i / (n - 1) - 0.5) * (spread - 24) : 0;
       const e = spawnEnemy('swarm', {
         word: word,
         x: cx + off + U.rand(-12, 12),
@@ -748,9 +749,10 @@ PI.Entities = (function () {
     e.dashDX = Math.sin(ang) * dist * dir;
     e.dashDY = Math.cos(ang) * dist;
     e.dashing = true; e.dashProg = 0; e.dashPrev = 0;
-    e.dashT = 1;
+    e.dashT = 1;                                   // streak alpha, decays to 0
     e.dashX0 = e.x; e.dashY0 = e.y;
     e.dashTimer = 0;
+    e.dashCount++;
     // red streak trail (renderer also draws a streak from dashX0 using dashT)
     const n = Math.max(1, num(cfg.streakCount, 4));
     for (let i = 0; i < n; i++) {
