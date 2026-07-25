@@ -95,7 +95,7 @@ autoplay clip. Because Playwright's bundled ffmpeg is a stripped build with no G
 encoder, and adding a dependency would undercut the point of the project, `tools/gif.mjs` is a
 zero-dependency animated GIF encoder and `tools/png.mjs` a matching PNG decoder.
 
-The demo clip opens mid-game deliberately: wave 1 runs a ~2 second spawn interval by design,
+The clip is 420x236, 15s at 10fps, 6.8 MB — under the 8 MB most social uploads allow. The clip opens mid-game deliberately: wave 1 runs a ~2 second spawn interval by design,
 which films as an empty screen. The recording bot also holds its combo near the flow-state
 threshold, since 25 clean kills do not fit in fifteen seconds.
 
