@@ -4,7 +4,9 @@ A typing-defence game. Hostile prompts descend toward your context window; you a
 alignment layer. **Type a word to lock on, finish it to destroy it.** Every fifth wave, a
 full prompt-injection attack arrives as a phrase you dismantle word by word.
 
-**Play it:** open `index.html`. No install, no build, no server — one file, straight from disk.
+**Play it in a browser:** https://claude.ai/code/artifact/093898c0-0972-4441-8f22-b71f91c91c36
+
+Or open `index.html` locally — no install, no build, no server, one file straight from disk.
 
 ![gameplay](tools/shots/demo.gif)
 
@@ -99,20 +101,36 @@ The clip is 420x236, 15s at 10fps, 6.8 MB — under the 8 MB most social uploads
 which films as an empty screen. The recording bot also holds its combo near the flow-state
 threshold, since 25 clean kills do not fit in fifteen seconds.
 
-## Embedding
+## Putting it on a website
 
-`index.html` is self-contained and iframe-safe (no `window.top` access, storage wrapped in
-`try/catch`), which is verified by the acceptance gate:
+`index.html` is self-contained and iframe-safe — no `window.top` access, storage wrapped in
+`try/catch` so a blocked-storage context degrades instead of throwing. The acceptance gate
+verifies it boots inside an iframe with no errors.
+
+**Hosting it on GitHub Pages.** `.github/workflows/pages.yml` builds from `src/` and deploys
+on every push to the default branch. One-time setup: **Settings → Pages → Source: "GitHub
+Actions"**. The game then lives at `https://<owner>.github.io/<repo>/`. The workflow rebuilds
+rather than trusting the committed `index.html`, so if `src/` and the built file ever disagree,
+`src/` wins.
+
+**Embedding it in another page:**
 
 ```html
-<iframe src="prompt-injection/index.html"
+<iframe src="https://<owner>.github.io/<repo>/"
         width="960" height="540"
         style="border:0;border-radius:8px"
-        title="Prompt Injection — a typing defence game"></iframe>
+        title="Prompt Injection — a typing defence game"
+        allow="autoplay"></iframe>
 ```
 
-It needs keyboard focus, so viewers may need to click it once. Touch-only devices get a card
-explaining the game needs a keyboard.
+The canvas letterboxes to whatever box you give it, so any aspect ratio works — verified at
+1100x620 as well as 16:9. Two things to know: the game needs **keyboard focus**, so viewers
+click once before typing (the page shows a "click to focus" hint until then), and audio starts
+on the first keystroke because browsers block autoplay before a user gesture. Touch-only
+devices get a card explaining the game needs a keyboard.
+
+`build.mjs` also emits `web/play.html`, the same game minus the `<meta>` tags, for hosts that
+supply their own document shell.
 
 ## Screenshots
 

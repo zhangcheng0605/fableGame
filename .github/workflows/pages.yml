@@ -1,0 +1,57 @@
+name: Deploy game to GitHub Pages
+
+# Publishes the game to https://<owner>.github.io/<repo>/ so it can be played in a
+# browser and embedded in an <iframe> on another site.
+#
+# One-time setup: repository Settings -> Pages -> Source: "GitHub Actions".
+# After that every push to the default branch redeploys. Use "Run workflow" on the
+# Actions tab to deploy from a different branch.
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let a running deploy finish rather than cancelling it mid-publish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # The game has no dependencies, so this is a plain concatenation of src/*.js.
+      # Building here rather than trusting the committed file keeps the deployed page
+      # honest: if src/ and index.html ever disagree, src/ wins.
+      - name: Build
+        run: node build.mjs
+
+      - name: Assemble site
+        run: |
+          mkdir -p _site
+          cp index.html _site/index.html
+          # A .nojekyll file stops Pages from running Jekyll over the output, which
+          # would otherwise ignore any path beginning with an underscore.
+          touch _site/.nojekyll
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4

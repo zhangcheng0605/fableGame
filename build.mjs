@@ -77,8 +77,17 @@ PI.Game.boot();
 `
 
   fs.writeFileSync(OUT, html)
+
+  // Second target: a hosted-page variant for publishing to a URL people can click.
+  // The host wraps page content in its own <head>/<body>, so the charset and viewport
+  // meta tags are dropped here — left in place they would land inside <body>.
+  const hosted = html.replace(/^<meta[^>]*>\n/gm, '')
+  fs.mkdirSync(path.join(ROOT, 'web'), { recursive: true })
+  fs.writeFileSync(path.join(ROOT, 'web', 'play.html'), hosted)
+
   const kb = Buffer.byteLength(html) / 1024
   console.log(`built index.html — ${kb.toFixed(1)} KB from ${files.length} modules`)
+  console.log(`built web/play.html — hosted variant`)
   for (const f of files) {
     const lines = fs.readFileSync(path.join(SRC, f), 'utf8').split('\n').length
     console.log(`  ${f.padEnd(18)} ${String(lines).padStart(5)} lines`)
