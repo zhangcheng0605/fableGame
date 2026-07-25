@@ -80,7 +80,13 @@ PI.Core = (function () {
         const out = [];
         for (let i = 0; i < l.length; i++) {
           const e = l[i];
-          out.push({ word: e.word, typed: e.typed, x: e.x, y: e.y, type: e.type, kind: e.kind });
+          // spawnT is exposed so automated players can wait out the materialize gate
+          // the way a human does — without it a bot fires at an enemy that is not yet
+          // targetable and records a typo the game would never charge a person.
+          out.push({
+            word: e.word, typed: e.typed, x: e.x, y: e.y, type: e.type, kind: e.kind,
+            spawnT: e.spawnT, dying: !!e.dying, alive: !!e.alive
+          });
         }
         return out;
       },

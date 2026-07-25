@@ -19,6 +19,26 @@ PI.Entities = (function () {
   const TURRET_X = num(T.player && T.player.turretX, W * 0.5);
   const TURRET_Y = num(T.player && T.player.turretY, H - 86);
 
+  // Hot-path tuning, resolved once (no per-frame property walks / no allocation).
+  const HAL = EN.halluc, JL = EN.jail, OVF = EN.overflow, CMD = EN.command;
+  const SPAWN_Y = num(EC.spawnY, -46);
+  const MAT_T = Math.max(0.01, num(EC.materialize, 0.25));
+  const DYING_T = Math.max(0.01, num(EC.dyingTime, 0.18));
+  const WOBBLE = num(EC.wobbleAmpX, 5);
+  const MARGIN_X = num(EC.spawnMarginX, 84);
+  const HAL_AMP = num(HAL.amplitude, 60), HAL_PER = Math.max(0.1, num(HAL.period, 3));
+  const HAL_OP = num(HAL.opacity, 0.55), HAL_FD = num(HAL.flickerDepth, 0.18);
+  const HAL_FHZ = num(HAL.flickerHz, 9), HAL_JIT = num(HAL.jitter, 1);
+  const JL_IV = num(JL.dashInterval, 2.5), JL_DIST = num(JL.dashDist, 120);
+  const JL_TIME = Math.max(0.02, num(JL.dashTime, 0.2)), JL_ANG = num(JL.dashAngle, 0.7);
+  const JL_STREAK = Math.max(0.05, num(JL.streakLife, 0.32));
+  const OVF_GAIN = num(OVF.pulseGain, 0.32), OVF_DEPTH = num(OVF.pulseByDepth, 0.45);
+  const OVF_PER = Math.max(0.1, num(OVF.pulsePeriod, 1.7));
+  const CMD_PER = Math.max(0.1, num(CMD.pulsePeriod, 0.9)), CMD_GAIN = num(CMD.pulseGain, 0.16);
+  const CMD_SPARK_IV = num(CMD.sparkleInterval, 0.1), CMD_SPARK_N = num(CMD.sparkleCount, 2);
+  const CMD_DESPAWN = num(CMD.despawnBelow, 700);
+  const DEPTH_SPAN = Math.max(1, LEAK_Y - SPAWN_Y);
+
   // ------------------------------------------------------------------ state
   const list = [];                 // stable array reference (debug hook maps it)
   let nextId = 1;
@@ -115,7 +135,7 @@ PI.Entities = (function () {
         }
       } catch (_) { }
     }
-    if (!e.measured) { sizeEnemy(e); clampX(e); }
+    if (!e.measured) { sizeEnemy(e); if (e.kind !== 'bossword') clampX(e); }
     return e;
   }
   // Centre of letter i — used for laser tracers and per-letter particles.
@@ -180,7 +200,7 @@ PI.Entities = (function () {
   }
   function placeX(width, y, h, extra) {
     const half = width * 0.5 + num(extra, 0);
-    const margin = num(EC.spawnMarginX, 84);
+    const margin = MARGIN_X;
     let lo = Math.max(margin, half + 6);
     let hi = Math.min(W - margin, W - half - 6);
     if (hi <= lo) { lo = hi = W * 0.5; }
@@ -194,7 +214,7 @@ PI.Entities = (function () {
     return best;
   }
   function clampX(e) {
-    const half = e.w * (e.scale || 1) * 0.5 + (e.type === 'halluc' ? num(EN.halluc.amplitude, 60) : 0);
+    const half = e.w * (e.scale || 1) * 0.5 + (e.type === 'halluc' ? HAL_AMP : 0);
     const lo = Math.max(6, half + 4), hi = Math.min(W - 6, W - half - 4);
     if (hi <= lo) { e.baseX = W * 0.5; }
     else e.baseX = U.clamp(e.baseX, lo, hi);
@@ -209,7 +229,7 @@ PI.Entities = (function () {
       // ---- contract fields -------------------------------------------------
       id: nextId++, kind: kind, type: type,
       word: word, typed: 0,
-      x: W * 0.5, y: num(EC.spawnY, -46), vy: 0,
+      x: W * 0.5, y: SPAWN_Y, vy: 0,
       w: 0, h: 0,
       color: C.forType(type),
       alive: true, dying: false,
@@ -238,7 +258,7 @@ PI.Entities = (function () {
       effectFired: false, deathHandled: false, offsetX: 0
     };
     sizeEnemy(e);
-    if (type === 'halluc') { e.jitter = true; e.sineAmp = num(EN.halluc.amplitude, 60); }
+    if (type === 'halluc') { e.jitter = true; e.sineAmp = HAL_AMP; }
     return e;
   }
 
@@ -247,14 +267,13 @@ PI.Entities = (function () {
     e.spawnT = 0;
     const g = EC.materializeGlyphs || [6, 10];
     const n = U.randInt(num(g[0], 6), num(g[1], 10));
-    const life = num(EC.materialize, 0.25);
+    const life = MAT_T;
     const half = e.w * 0.5;
     for (let i = 0; i < n; i++) {
       FX.converge(e.x + U.rand(-half, half), e.y + U.rand(-e.h * 0.4, e.h * 0.4),
         U.pick(U.GLYPHS), {
           color: e.color, life: life * U.rand(0.8, 1.0),
-          size: e.fontSize * 0.85, dist: U.rand(70, num(EC.materializeGlyphs && 160, 160)),
-          alpha: 0.9
+          size: e.fontSize * 0.85, dist: U.rand(70, 160), alpha: 0.9
         });
     }
   }
@@ -296,11 +315,10 @@ PI.Entities = (function () {
     const e = makeEnemy(type, word);
     e.baseSpeed = num(o.speed, num(cfg.speed, 30));
     e.speedMul = num(o.speedMul, currentSpeedMul());
-    e.y = num(o.y, num(EC.spawnY, -46));
-    const extra = (type === 'halluc') ? num(EN.halluc.amplitude, 60) : 0;
+    e.y = num(o.y, SPAWN_Y);
+    const extra = (type === 'halluc') ? HAL_AMP : 0;
     e.baseX = (o.x !== undefined && o.x !== null) ? o.x : placeX(e.w, e.y, e.h, extra);
     clampX(e);
-    if (o.dampen) e.speedMul *= o.dampen;
     list.push(e);
     materialize(e);
     return e;
@@ -312,7 +330,7 @@ PI.Entities = (function () {
     const n = Math.max(1, num(cfg.count, 3));
     const spread = num(cfg.spread, 150), spreadY = num(cfg.spreadY, 90);
     const pending = [];
-    const cx = U.rand(num(EC.spawnMarginX, 84) + spread * 0.5, W - num(EC.spawnMarginX, 84) - spread * 0.5);
+    const cx = U.rand(MARGIN_X + spread * 0.5, W - MARGIN_X - spread * 0.5);
     let first = null;
     for (let i = 0; i < n; i++) {
       const word = chooseWord('swarm', pending);
@@ -322,7 +340,7 @@ PI.Entities = (function () {
       const e = spawnEnemy('swarm', {
         word: word,
         x: cx + off + U.rand(-12, 12),
-        y: num(EC.spawnY, -46) - U.rand(0, spreadY),
+        y: SPAWN_Y - U.rand(0, spreadY),
         pending: pending
       });
       if (!first) first = e;
@@ -393,7 +411,7 @@ PI.Entities = (function () {
     e.baseSpeed = num(EN.command.speed, 20);
     e.speedMul = 1;
     e.damage = 0;
-    e.y = num(EC.spawnY, -46);
+    e.y = SPAWN_Y;
     e.baseX = placeX(e.w, e.y, e.h, 0);
     clampX(e);
     list.push(e);
@@ -737,29 +755,26 @@ PI.Entities = (function () {
   }
 
   // ------------------------------------------------------------------ per-enemy
+  // §6 jailbreak: every 2.5s it dashes 120px diagonally, trailing a red streak.
   function startDash(e) {
-    const cfg = EN.jail;
-    const ang = num(cfg.dashAngle, 0.7);
-    const dist = num(cfg.dashDist, 120);
     let dir = -e.dashDir;
-    const dx = Math.sin(ang) * dist * dir;
     const half = e.w * 0.5 + 20;
+    const dx = Math.sin(JL_ANG) * JL_DIST * dir;
     if (e.baseX + dx < half || e.baseX + dx > W - half) dir = -dir;
     e.dashDir = dir;
-    e.dashDX = Math.sin(ang) * dist * dir;
-    e.dashDY = Math.cos(ang) * dist;
+    e.dashDX = Math.sin(JL_ANG) * JL_DIST * dir;
+    e.dashDY = Math.cos(JL_ANG) * JL_DIST;
     e.dashing = true; e.dashProg = 0; e.dashPrev = 0;
-    e.dashT = 1;                                   // streak alpha, decays to 0
+    e.dashT = 1;                                     // streak alpha, decays to 0
     e.dashX0 = e.x; e.dashY0 = e.y;
     e.dashTimer = 0;
     e.dashCount++;
-    // red streak trail (renderer also draws a streak from dashX0 using dashT)
-    const n = Math.max(1, num(cfg.streakCount, 4));
+    const n = Math.max(1, num(JL.streakCount, 4));
     for (let i = 0; i < n; i++) {
       FX.trail(e.x, e.y, {
         color: C.red, vx: e.dashDX * 2.2, vy: e.dashDY * 2.2,
-        life: num(cfg.streakLife, 0.32) * U.rand(0.6, 1),
-        size: num(cfg.streakWidth, 3), len: 0.05, alpha: 0.8, delay: i * 0.02, drag: 2.2
+        life: JL_STREAK * U.rand(0.6, 1), size: num(JL.streakWidth, 3),
+        len: 0.05, alpha: 0.8, delay: i * 0.02, drag: 2.2
       });
     }
   }
@@ -769,28 +784,28 @@ PI.Entities = (function () {
 
     // materialize (§11.5) — not targetable until spawnT > 0.35
     if (e.spawnT < 1) {
-      e.spawnT = Math.min(1, e.spawnT + dt / Math.max(0.01, num(EC.materialize, 0.25)));
+      e.spawnT = Math.min(1, e.spawnT + dt / MAT_T);
       if (e.spawnT >= 1 && !e.snapped) {
-        e.snapped = true;
+        e.snapped = true;                              // "snap into the word with a small flash"
         FX.spark(e.x, e.y, { color: e.color, count: 5, speed: [50, 160], life: [0.12, 0.26], size: 2 });
       }
     }
-    // per-letter consume pop bookkeeping for the renderer (§11)
+    // per-letter consume-pop bookkeeping, so 50-render can do the §11 scale-pop
+    // without 40-typing having to tell it anything.
     if (e.typed !== e.typedSeen) {
       if (e.typed > e.typedSeen) { e.popIndex = e.typed - 1; e.popT = 0; }
       e.typedSeen = e.typed;
     } else if (e.popT < 9) e.popT += dt;
     if (e.shakeT > 0) e.shakeT = Math.max(0, e.shakeT - dt);
 
-    if (!e.measured) { sizeEnemy(e); if (e.kind === 'enemy' || e.kind === 'command') clampX(e); }
+    if (!e.measured) { sizeEnemy(e); if (e.kind !== 'bossword') clampX(e); }
 
     if (e.dying) {
       e.dieT += dt;
-      e.alpha = Math.max(0, 1 - e.dieT / Math.max(0.01, num(EC.dyingTime, 0.18)));
-      if (e.dieT >= num(EC.dyingTime, 0.18)) remove(e);
+      e.alpha = Math.max(0, 1 - e.dieT / DYING_T);
+      if (e.dieT >= DYING_T) remove(e);
       return;
     }
-
     // boss words are positioned by the boss itself
     if (e.kind === 'bossword') { e.alpha = 1; e.scale = e.baseScale; return; }
 
@@ -799,25 +814,22 @@ PI.Entities = (function () {
     e.vy = moving ? e.baseSpeed * e.speedMul : 0;
     if (moving) e.y += e.vy * dt;
 
-    // slight individual wobble (§6) on top of the type behaviour
-    let x = e.baseX + Math.sin(e.wobblePhase + e.ageT * e.wobbleFreq * TAU) * num(EC.wobbleAmpX, 5);
+    // "slight individual wobble" (§6), under every type behaviour
+    let x = e.baseX + Math.sin(e.wobblePhase + e.ageT * e.wobbleFreq * TAU) * WOBBLE;
     let alpha = 1;
     let scale = e.baseScale;
 
     switch (e.type) {
       case 'halluc': {
-        const cfg = EN.halluc;
-        // sine drift: amplitude 60px, period 3s
-        x += Math.sin(e.sinePhase + e.ageT * TAU / Math.max(0.1, num(cfg.period, 3))) * num(cfg.amplitude, 60);
-        const fl = 1 - num(cfg.flickerDepth, 0.18) * (0.5 + 0.5 * Math.sin(e.ageT * TAU * num(cfg.flickerHz, 9)));
-        alpha = num(cfg.opacity, 0.55) * fl;
-        e.jitterPx = num(cfg.jitter, 1);                 // renderer: +/-1px letters
+        // sine drift (amplitude 60px, period 3s) + 55% opacity + letter jitter
+        x += Math.sin(e.sinePhase + e.ageT * TAU / HAL_PER) * HAL_AMP;
+        alpha = HAL_OP * (1 - HAL_FD * (0.5 + 0.5 * Math.sin(e.ageT * TAU * HAL_FHZ)));
+        e.jitterPx = HAL_JIT;                          // renderer: +/-1px per letter
         break;
       }
       case 'jail': {
-        const cfg = EN.jail;
         if (e.dashing) {
-          e.dashProg += dt / Math.max(0.02, num(cfg.dashTime, 0.2));
+          e.dashProg += dt / JL_TIME;
           const p = Math.min(1, e.dashProg);
           const eased = U.easeOutCubic(p);
           const d = eased - e.dashPrev;
@@ -825,62 +837,52 @@ PI.Entities = (function () {
           e.baseX += e.dashDX * d;
           e.y += e.dashDY * d;
           if (p >= 1) e.dashing = false;
-          x = e.baseX + Math.sin(e.wobblePhase + e.ageT * e.wobbleFreq * TAU) * num(EC.wobbleAmpX, 5);
-        } else if (!frozen && e.spawnT >= 1) {
+          x = e.baseX + Math.sin(e.wobblePhase + e.ageT * e.wobbleFreq * TAU) * WOBBLE;
+        } else if (moving) {
           e.dashTimer += dt;
-          if (e.dashTimer >= num(cfg.dashInterval, 2.5)) startDash(e);
+          if (e.dashTimer >= JL_IV) startDash(e);
         }
-        if (e.dashT > 0) e.dashT = Math.max(0, e.dashT - dt / Math.max(0.05, num(cfg.streakLife, 0.32)));
+        if (e.dashT > 0) e.dashT = Math.max(0, e.dashT - dt / JL_STREAK);
         break;
       }
       case 'overflow': {
-        const cfg = EN.overflow;
-        // slow tank that pulses larger the deeper it gets
-        const span = Math.max(1, LEAK_Y - num(EC.spawnY, -46));
-        const depth = U.clamp((e.y - num(EC.spawnY, -46)) / span, 0, 1);
-        const pulse = 0.5 + 0.5 * Math.sin(e.ageT * TAU / Math.max(0.1, num(cfg.pulsePeriod, 1.7)));
+        // slow tank; pulses larger the deeper it gets
+        const depth = U.clamp((e.y - SPAWN_Y) / DEPTH_SPAN, 0, 1);
+        const pulse = 0.5 + 0.5 * Math.sin(e.ageT * TAU / OVF_PER);
         e.pulse = pulse;
-        scale = e.baseScale * (1
-          + num(cfg.pulseGain, 0.32) * pulse * (0.35 + 0.65 * depth)
-          + num(cfg.pulseByDepth, 0.45) * depth * 0.5);
+        scale = e.baseScale * (1 + OVF_GAIN * pulse * (0.35 + 0.65 * depth) + OVF_DEPTH * depth * 0.5);
         break;
       }
       case 'command': {
-        const cfg = EN.command;
-        const pulse = 0.5 + 0.5 * Math.sin(e.ageT * TAU / Math.max(0.1, num(cfg.pulsePeriod, 0.9)));
+        const pulse = 0.5 + 0.5 * Math.sin(e.ageT * TAU / CMD_PER);
         e.pulse = pulse;
-        scale = e.baseScale * (1 + num(cfg.pulseGain, 0.16) * pulse);
+        scale = e.baseScale * (1 + CMD_GAIN * pulse);   // golden words pulse + sparkle
         e.sparkT -= dt;
         if (e.sparkT <= 0) {
-          e.sparkT = num(cfg.sparkleInterval, 0.1);
-          FX.spark(e.x + U.rand(-e.w * 0.5, e.w * 0.5), e.y + U.rand(-e.h * 0.4, e.h * 0.4), {
-            color: C.gold, count: num(cfg.sparkleCount, 2),
-            speed: [10, 60], life: [0.25, 0.5], size: 2
-          });
+          e.sparkT = CMD_SPARK_IV;
+          FX.spark(e.x + U.rand(-e.w * 0.5, e.w * 0.5), e.y + U.rand(-e.h * 0.4, e.h * 0.4),
+            { color: C.gold, count: CMD_SPARK_N, speed: [10, 60], life: [0.25, 0.5], size: 2 });
         }
-        // §10: leaking despawns harmlessly
-        if (e.y >= num(cfg.despawnBelow, 700)) {
+        if (e.y >= CMD_DESPAWN) {                      // §10: leaks harmlessly
           FX.spark(e.x, e.y, { color: C.gold, count: 8, speed: [40, 140], life: [0.2, 0.4], size: 2 });
           remove(e);
           return;
         }
         break;
       }
-      default: break;                                    // token / swarm: straight fall
+      default: break;                                  // token / swarm: straight fall
     }
 
     e.x = x;
     e.scale = scale;
-    // fade in over the materialize window, then hold the type opacity
     e.alpha = alpha * U.lerp(0.2, 1, U.easeOutCubic(e.spawnT));
 
-    // §6 leak: exactly once, then the enemy is gone
+    // §6 leak: PI.Game.leak(e) exactly once, then the enemy is gone
     if (e.kind === 'enemy' && !e.leaked && (e.y + e.h * scale * 0.5) >= LEAK_Y) {
       e.leaked = true;
       if (e.tutorial && state !== 'PLAYING') {
-        // title-screen tutorial word loops instead of hurting anybody
-        e.leaked = false;
-        e.y = num(EC.spawnY, -46);
+        e.leaked = false;                              // title tutorial word just loops
+        e.y = SPAWN_Y;
         e.typed = 0;
         return;
       }
@@ -1027,9 +1029,12 @@ PI.Entities = (function () {
     const ts = (Core && typeof Core.timeScale === 'number' && Core.timeScale > 0.001) ? Core.timeScale : 1;
     const udt = dt / ts;                                 // ~real time (choreography)
     const state = (Core && Core.state) || 'PLAYING';
+    // §14 auto-pause: paused means paused, even if Game keeps calling update().
+    if (state === 'PAUSED') return;
 
     if (freezeT > 0) freezeT = Math.max(0, freezeT - dt);
-    updatePurge(udt);
+    // the popcorn cascade only pops while the run is live (it scores)
+    if (state === 'PLAYING') updatePurge(udt); else purgeQueue.length = 0;
 
     for (let i = list.length - 1; i >= 0; i--) {
       const e = list[i];
@@ -1059,57 +1064,39 @@ PI.Entities = (function () {
 
   // ------------------------------------------------------------------ api
   const api = {
-    list: list,
-    reset: reset,
-    update: update,
-    spawn: spawn,
-    startWave: startWave,
-    freeze: freeze,
-    purge: purge,
-    stopSeq: stopSeq,
-    remove: remove,
+    list: list, reset: reset, update: update, spawn: spawn, startWave: startWave,
+    freeze: freeze, purge: purge, stopSeq: stopSeq, remove: remove,
     targetableBossWord: targetableBossWord,
-    // extras the integrator may find useful (all documented in the header)
-    applyCommand: applyCommand,
-    bossWordKilled: bossWordKilled,
-    spawnCommand: spawnCommand,
-    spawnTutorial: spawnTutorial,
-    measureEnemy: measureEnemy,
-    letterPos: letterPos,
-    nextChar: nextChar,
-    nextBossWave: nextBossWave,
-    targetable: function (e) { return !!(e && e.targetable); },
-    threats: threats,
-    leakLine: LEAK_Y
+    // extras for the integrator: effect dispatch, boss bookkeeping, geometry
+    applyCommand: applyCommand, bossWordKilled: bossWordKilled,
+    spawnCommand: spawnCommand, spawnTutorial: spawnTutorial,
+    measureEnemy: measureEnemy, letterPos: letterPos, nextChar: nextChar,
+    nextBossWave: nextBossWave, threats: threats, leakLine: LEAK_Y,
+    targetable: function (e) { return !!(e && e.targetable); }
   };
-  // Contract properties that must always read live state. Setters exist so a
-  // stray assignment from another module can never throw in strict mode.
-  Object.defineProperty(api, 'wave', {
-    get: function () { return wave; },
-    set: function (v) { wave = Math.max(0, Math.round(num(v, wave))); }
-  });
-  Object.defineProperty(api, 'boss', {
-    get: function () { return boss; },
-    set: function (v) { if (v === null) hardClearBoss(); }
-  });
-  Object.defineProperty(api, 'bossTier', {
-    get: function () { return bossTier; },
-    set: function (v) { bossTier = Math.max(0, Math.round(num(v, bossTier))); }
-  });
-  Object.defineProperty(api, 'commandOnScreen', {
-    get: function () { return commandOnScreen; },
-    set: function (v) { if (v === null) { if (commandOnScreen) remove(commandOnScreen); } }
-  });
-  Object.defineProperty(api, 'frozen', { get: function () { return freezeT > 0; } });
-  Object.defineProperty(api, 'freezeT', { get: function () { return freezeT; } });
-  Object.defineProperty(api, 'phase', { get: function () { return phase; } });
-  Object.defineProperty(api, 'phaseT', { get: function () { return phaseT; } });
-  Object.defineProperty(api, 'budget', { get: function () { return budget; } });
-  Object.defineProperty(api, 'spawned', { get: function () { return spawnedCount; } });
-  Object.defineProperty(api, 'speedMul', { get: function () { return currentSpeedMul(); } });
-  Object.defineProperty(api, 'spawnInterval', { get: function () { return currentInterval(); } });
-  Object.defineProperty(api, 'bossesDefeated', { get: function () { return bossesDefeated; } });
-  Object.defineProperty(api, 'purging', { get: function () { return purgeQueue.length > 0; } });
+  // Live-state properties. Every one has a setter too, so a stray assignment
+  // from another module can never throw in strict mode.
+  function prop(name, get, set) {
+    Object.defineProperty(api, name, { get: get, set: set || function () { }, enumerable: true });
+  }
+  prop('wave', function () { return wave; },
+    function (v) { wave = Math.max(0, Math.round(num(v, wave))); });
+  prop('boss', function () { return boss; },
+    function (v) { if (v === null) hardClearBoss(); });
+  prop('bossTier', function () { return bossTier; },
+    function (v) { bossTier = Math.max(0, Math.round(num(v, bossTier))); });
+  prop('commandOnScreen', function () { return commandOnScreen; },
+    function (v) { if (v === null && commandOnScreen) remove(commandOnScreen); });
+  prop('frozen', function () { return freezeT > 0; });
+  prop('freezeT', function () { return freezeT; });
+  prop('phase', function () { return phase; });
+  prop('phaseT', function () { return phaseT; });
+  prop('budget', function () { return budget; });
+  prop('spawned', function () { return spawnedCount; });
+  prop('speedMul', currentSpeedMul);
+  prop('spawnInterval', currentInterval);
+  prop('bossesDefeated', function () { return bossesDefeated; });
+  prop('purging', function () { return purgeQueue.length > 0; });
 
   return api;
 })();

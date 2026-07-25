@@ -85,7 +85,9 @@ const dbg = () =>
 // Choose the next character to type so the bot always agrees with the game's own
 // targeting rule (nearest the bottom wins; boss words go left to right).
 function nextChar(s) {
-  const live = s.enemies.filter((e) => e.typed < e.word.length)
+  const live = s.enemies.filter(
+    (e) => e.typed < e.word.length && e.alive !== false && !e.dying && (e.spawnT === undefined || e.spawnT > 0.4)
+  )
   if (!live.length) return null
 
   if (s.target) {
