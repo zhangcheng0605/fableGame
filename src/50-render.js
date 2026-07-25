@@ -111,7 +111,50 @@ PI.Render = (function () {
   function initRain() {
     rain.far = makeColumns(num(TR.farCount, 60), num(TR.farSize, 13), num(TR.farSpeed, 26));
     rain.near = makeColumns(num(TR.nearCount, 40), num(TR.nearSize, 17), num(TR.nearSpeed, 62));
+    rain.offFar = 0;
+    rain.offNear = 0;
     rain.ready = true;
+  }
+
+  // Drawing the glyph field per character cost ~4,300 fillText calls a frame and put
+  // the game under 55fps on a software rasteriser. Each layer is pre-rendered once into
+  // a vertically tileable strip and blitted twice per frame instead; the hue shift
+  // cross-fades a second, cyan copy. Strip height is a whole multiple of the glyph step
+  // so the seam is invisible.
+  const strips = { ready: false, far: null, farCyan: null, near: null, nearCyan: null, farH: 0, nearH: 0 };
+
+  function buildStrip(cols, size, color) {
+    const stripH = Math.ceil(H / size) * size;
+    const c = makeLayer(W, stripH);
+    if (!c) return null;
+    const g = c.getContext('2d');
+    g.font = Math.round(size) + 'px ' + FONT;
+    g.textAlign = 'left';
+    g.textBaseline = 'alphabetic';
+    g.fillStyle = color;
+    const rows = Math.ceil(stripH / size);
+    for (let i = 0; i < cols.length; i++) {
+      const col = cols[i];
+      for (let k = 0; k < rows; k++) {
+        g.fillText(col.glyphs[k % col.glyphs.length], col.x, k * size + size);
+      }
+    }
+    return { canvas: c, h: stripH };
+  }
+
+  function ensureStrips() {
+    if (strips.ready) return;
+    if (!rain.ready) initRain();
+    const fs = num(TR.farSize, 13), ns = num(TR.nearSize, 17);
+    const f = buildStrip(rain.far, fs, C.rainFar);
+    const fc = buildStrip(rain.far, fs, C.cyan);
+    const n = buildStrip(rain.near, ns, C.rain);
+    const nc = buildStrip(rain.near, ns, C.cyan);
+    strips.far = f && f.canvas; strips.farH = f ? f.h : 0;
+    strips.farCyan = fc && fc.canvas;
+    strips.near = n && n.canvas; strips.nearH = n ? n.h : 0;
+    strips.nearCyan = nc && nc.canvas;
+    strips.ready = true;
   }
 
   function heat() {
@@ -125,22 +168,9 @@ PI.Render = (function () {
 
   function advanceRain(dt) {
     if (!rain.ready) initRain();
-    const h = heat();
-    const boost = 1 + num(TR.comboSpeedGain, 0.9) * h;
-    for (let layer = 0; layer < 2; layer++) {
-      const cols = layer === 0 ? rain.far : rain.near;
-      for (let i = 0; i < cols.length; i++) {
-        const col = cols[i];
-        col.y += col.speed * boost * dt;
-        if (col.y > H + col.size) col.y -= H + col.size * 2;
-        // Re-roll one glyph occasionally rather than every frame.
-        col.rollT -= dt;
-        if (col.rollT <= 0) {
-          col.rollT = U.rand(0.08, 0.4);
-          col.glyphs[U.randInt(0, col.glyphs.length - 1)] = U.pick(U.GLYPHS_ASCII || U.GLYPHS);
-        }
-      }
-    }
+    const boost = 1 + num(TR.comboSpeedGain, 0.9) * heat();
+    rain.offFar += num(TR.farSpeed, 26) * boost * dt;
+    rain.offNear += num(TR.nearSpeed, 62) * boost * dt;
   }
 
   function displaceAt(x, y, out) {
@@ -164,28 +194,52 @@ PI.Render = (function () {
 
   const dispOut = { x: 0, y: 0 };
 
-  function drawRainLayer(ctx, cols, alpha, colorFar) {
-    const h = heat();
-    // Hue shift: green -> cyan as the run heats up (§11.5 reactive background).
-    const shift = num(TR.comboHueShift, 0.85) * h;
-    ctx.fillStyle = shift > 0.02
-      ? U.hexA(C.cyan, alpha * (0.6 + 0.4 * shift))
-      : U.hexA(colorFar, alpha);
+  function blitStrip(ctx, canvas, stripH, offset, alpha) {
+    if (!canvas || alpha <= 0.004) return;
+    const off = ((offset % stripH) + stripH) % stripH;
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(canvas, 0, off - stripH);
+    ctx.drawImage(canvas, 0, off);
+    ctx.globalAlpha = 1;
+  }
+
+  // Per-glyph path, used only while a shockwave is bending the field (boss death).
+  function drawRainDisplaced(ctx, cols, size, offset, alpha, color) {
+    const stripH = Math.ceil(H / size) * size;
+    const off = ((offset % stripH) + stripH) % stripH;
+    const rows = Math.ceil(stripH / size);
+    ctx.fillStyle = U.hexA(color, alpha);
+    font(ctx, size);
     for (let i = 0; i < cols.length; i++) {
       const col = cols[i];
-      font(ctx, col.size);
-      for (let k = 0; k < col.glyphs.length; k++) {
-        const gy = col.y + k * col.size;
-        if (gy < -col.size || gy > H + col.size) continue;
-        const p = displaceAt(col.x, gy, dispOut);
-        ctx.fillText(col.glyphs[k], p.x, p.y);
+      for (let k = 0; k < rows; k++) {
+        const gy = k * size + size + off - stripH;
+        const gy2 = gy + stripH;
+        for (let pass = 0; pass < 2; pass++) {
+          const yy = pass === 0 ? gy : gy2;
+          if (yy < -size || yy > H + size) continue;
+          const pt = displaceAt(col.x, yy, dispOut);
+          ctx.fillText(col.glyphs[k % col.glyphs.length], pt.x, pt.y);
+        }
       }
+    }
+  }
+
+  // A handful of glyphs redrawn each frame keeps the field alive now that the bulk of
+  // it is a static blit.
+  function drawRainFlicker(ctx, dt) {
+    const n = 22;
+    font(ctx, num(TR.nearSize, 17));
+    ctx.fillStyle = U.hexA(heat() > 0.02 ? C.cyan : C.green, 0.5);
+    for (let i = 0; i < n; i++) {
+      ctx.fillText(U.pick(U.GLYPHS_ASCII || U.GLYPHS), U.rand(0, W), U.rand(0, H));
     }
   }
 
   function background(ctx, dt) {
     invalidateFont();
     ensureLayers();
+    ensureStrips();
     advanceRain(num(dt, 0));
 
     ctx.globalAlpha = 1;
@@ -193,8 +247,22 @@ PI.Render = (function () {
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
 
-    drawRainLayer(ctx, rain.far, num(TR.farAlpha, 0.16), C.rainFar);
-    drawRainLayer(ctx, rain.near, num(TR.nearAlpha, 0.3), C.rain);
+    const h = heat();
+    const shift = U.clamp(num(TR.comboHueShift, 0.85) * h, 0, 1);
+    const farA = num(TR.farAlpha, 0.16);
+    const nearA = num(TR.nearAlpha, 0.3);
+    const bending = !!(PI.FX && PI.FX.displacements && PI.FX.displacements.length);
+
+    if (bending) {
+      drawRainDisplaced(ctx, rain.far, num(TR.farSize, 13), rain.offFar, farA, shift > 0.02 ? C.cyan : C.rainFar);
+      drawRainDisplaced(ctx, rain.near, num(TR.nearSize, 17), rain.offNear, nearA, shift > 0.02 ? C.cyan : C.rain);
+    } else {
+      blitStrip(ctx, strips.far, strips.farH, rain.offFar, farA * (1 - shift));
+      blitStrip(ctx, strips.farCyan, strips.farH, rain.offFar, farA * shift);
+      blitStrip(ctx, strips.near, strips.nearH, rain.offNear, nearA * (1 - shift));
+      blitStrip(ctx, strips.nearCyan, strips.nearH, rain.offNear, nearA * shift);
+      drawRainFlicker(ctx, dt);
+    }
 
     // Freeze tint while temp=0 is active.
     const E = PI.Entities;
@@ -232,14 +300,36 @@ PI.Render = (function () {
     ctx.closePath();
   }
 
-  // Faked bloom: two layered radial gradients. shadowBlur is banned in the draw path.
+  // Faked bloom: a layered radial gradient. shadowBlur is banned in the draw path.
+  //
+  // Building a gradient per glow meant one createRadialGradient per enemy per frame.
+  // Gradients are position-independent if built at the origin and drawn through a
+  // translate, so they are cached by colour/alpha/radius bucket and reused.
+  const glowCache = new Map();
+  function glowGradient(ctx, radius, color, alpha) {
+    const rq = Math.max(4, Math.round(radius / 4) * 4);
+    const aq = Math.round(U.clamp(alpha, 0, 1) * 20) / 20;
+    const key = color + '|' + aq + '|' + rq;
+    let g = glowCache.get(key);
+    if (!g) {
+      g = ctx.createRadialGradient(0, 0, 0, 0, 0, rq);
+      g.addColorStop(0, U.hexA(color, aq));
+      g.addColorStop(0.55, U.hexA(color, aq * 0.35));
+      g.addColorStop(1, U.hexA(color, 0));
+      if (glowCache.size > 240) glowCache.clear();
+      glowCache.set(key, g);
+    }
+    return { grad: g, r: rq };
+  }
+
   function glow(ctx, x, y, radius, color, alpha) {
-    const g = ctx.createRadialGradient(x, y, 0, x, y, radius);
-    g.addColorStop(0, U.hexA(color, alpha));
-    g.addColorStop(0.55, U.hexA(color, alpha * 0.35));
-    g.addColorStop(1, U.hexA(color, 0));
-    ctx.fillStyle = g;
-    ctx.fillRect(x - radius, y - radius, radius * 2, radius * 2);
+    if (alpha <= 0.004 || radius <= 0) return;
+    const c = glowGradient(ctx, radius, color, alpha);
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.fillStyle = c.grad;
+    ctx.fillRect(-c.r, -c.r, c.r * 2, c.r * 2);
+    ctx.restore();
   }
 
   function drawEnemy(ctx, e) {
@@ -505,7 +595,9 @@ PI.Render = (function () {
     ctx.textBaseline = 'middle';
 
     const glitchK = glitch.t > 0 ? glitch.t / Math.max(0.01, num(J.contextGlitch, 0.15)) : 0;
-    const bands = num(J.contextGlitchBands, 7);
+    // The tear splits the line into offset bands, which costs a full redraw per band.
+    // Outside the 150ms glitch there is nothing to offset, so draw the line once.
+    const bands = glitchK > 0 ? num(J.contextGlitchBands, 7) : 1;
     const bandH = h / bands;
 
     for (let b = 0; b < bands; b++) {

@@ -31,11 +31,18 @@ function arg(name, fallback) {
   return v && !v.startsWith('--') ? v : true
 }
 
-const SECONDS = Number(arg('seconds', 18))
+const SECONDS = Number(arg('seconds', 22))
 const GIF_WIDTH = Number(arg('width', 480))
-const GIF_FPS = Number(arg('fps', 12))
+const GIF_FPS = Number(arg('fps', 10))
+const GIF_SECONDS = Number(arg('gif-seconds', 15))
 const HEADED = Boolean(arg('headed', false))
-const SKIP_HEAD = 1.5 // drop the first moments so the GIF opens on action
+// The clip opens mid-game on purpose. Wave 1 runs a ~2s spawn interval by design
+// (§8's ramp for a first-time player), which reads as an empty screen on film.
+const START_WAVE = Number(arg('wave', 7))
+const BOSS_WAVE = Number(arg('boss-wave', 10))
+// Enemies enter from above the viewport, so the first seconds of any recording show
+// a near-empty screen while the opening batch descends. Skip past it.
+const SKIP_HEAD = Number(arg('skip', 5))
 
 // Playwright's keyboard wants key names, not characters, for the non-alphanumerics.
 const KEYMAP = { ' ': 'Space', '=': 'Equal', '-': 'Minus', "'": "Quote" }
@@ -126,10 +133,20 @@ if ((await dbg()).state !== 'PLAYING') {
   await sleep(300)
 }
 
+// Open on a busy screen: a mid-game wave plus a pre-spawned mix of enemy types.
+await page.evaluate((w) => window.__PI.setWave(w), START_WAVE)
+await page.evaluate(() => {
+  for (let i = 0; i < 6; i++) window.__PI.spawn('token')
+  for (let i = 0; i < 3; i++) window.__PI.spawn('halluc')
+  for (let i = 0; i < 2; i++) window.__PI.spawn('jail')
+  window.__PI.spawn('swarm')
+  window.__PI.spawn('overflow')
+})
+await sleep(700)
+
 const t0 = Date.now()
 let bossJumped = false
-let nudgedFlow = false
-const timeline = []
+const timeline = [`opened on wave ${START_WAVE} with a pre-spawned mix`]
 
 while ((Date.now() - t0) / 1000 < SECONDS) {
   const elapsed = (Date.now() - t0) / 1000
@@ -138,20 +155,21 @@ while ((Date.now() - t0) / 1000 < SECONDS) {
   if (s.state !== 'PLAYING') break
 
   // Mid-clip: jump to a boss wave so the recording shows the boss choreography.
-  if (!bossJumped && elapsed > SECONDS * 0.55) {
+  if (!bossJumped && elapsed > SECONDS * 0.5) {
     bossJumped = true
-    const target = s.wave <= 5 ? 5 : Math.ceil((s.wave + 1) / 5) * 5
-    await page.evaluate((w) => window.__PI.setWave(w), target)
-    timeline.push(`${elapsed.toFixed(1)}s jumped to boss wave ${target}`)
+    await page.evaluate((w) => window.__PI.setWave(w), BOSS_WAVE)
+    timeline.push(`${elapsed.toFixed(1)}s jumped to boss wave ${BOSS_WAVE}`)
     await sleep(250)
     continue
   }
 
-  // The bot is fast, but 25 kills for flow state may not land inside a short clip.
-  if (!nudgedFlow && !s.flow && elapsed > SECONDS * 0.3 && s.combo < 24) {
-    nudgedFlow = true
+  // Flow state is the visual centrepiece (tint, cyan turret, faster background), and
+  // 25 clean kills will not fit in a short clip — hold the combo near the threshold.
+  if (s.combo < 22) {
     await page.evaluate(() => window.__PI.setCombo(24))
-    timeline.push(`${elapsed.toFixed(1)}s combo nudged to 24 to reach flow state in-clip`)
+    if (!timeline.some((l) => l.includes('combo held'))) {
+      timeline.push(`${elapsed.toFixed(1)}s combo held at 24+ so flow state is on camera`)
+    }
   }
 
   const ch = nextChar(s)
@@ -160,8 +178,10 @@ while ((Date.now() - t0) / 1000 < SECONDS) {
     continue
   }
   await page.keyboard.press(keyFor(ch))
-  // Human-ish cadence: fast, slightly irregular.
-  await sleep(48 + Math.random() * 34)
+  // Deliberately not maximum speed: a bot that kills on sight keeps every enemy
+  // pinned to the top of the screen, which films as a top-heavy, empty frame. A
+  // human-ish cadence lets the field spread down the viewport.
+  await sleep(95 + Math.random() * 55)
 }
 
 const final = await dbg()
@@ -202,7 +222,9 @@ execFileSync(
   { stdio: 'pipe' }
 )
 
-const files = fs.readdirSync(frameDir).filter((f) => f.endsWith('.png')).sort()
+let files = fs.readdirSync(frameDir).filter((f) => f.endsWith('.png')).sort()
+const maxFrames = Math.max(1, Math.round(GIF_SECONDS * GIF_FPS))
+if (files.length > maxFrames) files = files.slice(0, maxFrames)
 const frames = []
 let w = 0
 let h = 0

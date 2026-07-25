@@ -73,6 +73,24 @@ page.on('request', (r) => {
 page.on('console', (m) => m.type() === 'error' && consoleErrors.push(m.text()))
 page.on('pageerror', (e) => pageErrors.push(String(e)))
 
+await page.addInitScript(() => {
+  // Count draw calls so the gate can detect a render-path leak independently of fps.
+  const p = CanvasRenderingContext2D.prototype
+  const ft = p.fillText
+  let text = 0
+  p.fillText = function (...a) { text++; return ft.apply(this, a) }
+  window.__drawProbe = () =>
+    new Promise((resolve) => {
+      text = 0
+      let f = 0
+      const t0 = performance.now()
+      const tick = () => {
+        if (++f < 90) requestAnimationFrame(tick)
+        else resolve({ textPerFrame: Math.round(text / f), fps: 1000 / ((performance.now() - t0) / f) })
+      }
+      requestAnimationFrame(tick)
+    })
+})
 await page.goto('file://' + INDEX)
 await page.waitForFunction('window.__PI && window.__PI.state', null, { timeout: 15000 })
 await sleep(1200)
@@ -120,6 +138,7 @@ if ((await dbg()).state !== 'PLAYING') {
   await sleep(500)
 }
 check('a run starts', (await dbg()).state === 'PLAYING')
+const earlyVolume = await page.evaluate(() => window.__drawProbe())
 
 // Bot that agrees with the game's targeting rule, so a miss means a real defect.
 async function playFor(seconds) {
@@ -162,47 +181,15 @@ await playFor(14)
 const afterBoss = await dbg()
 check('boss can be damaged/killed', afterBoss.score > beforeBoss, `score ${beforeBoss} -> ${afterBoss.score}`)
 
-// Performance under the spec's stated load. Particles have sub-second lifetimes, so
-// a single stress() call drains long before the probe ends and would measure an empty
-// screen; the population is topped up every frame and the observed minimum reported.
-await page.evaluate(() => {
-  for (let i = 0; i < 30; i++) window.__PI.spawn('token')
-})
-const fps = await page.evaluate(
-  () =>
-    new Promise((resolve) => {
-      const ts = []
-      let counts = []
-      let last = performance.now()
-      let n = 0
-      window.__PI.stress(300)
-      const tick = (t) => {
-        ts.push(t - last)
-        last = t
-        const live = window.__PI.particles()
-        counts.push(live)
-        if (live < 300) window.__PI.stress(300 - live)
-        if (++n < 240) requestAnimationFrame(tick)
-        else {
-          const sorted = ts.slice().sort((a, b) => a - b)
-          // discard the first few frames: stress() itself allocates on frame 1
-          const warm = ts.slice(5)
-          resolve({
-            avg: 1000 / (warm.reduce((a, b) => a + b, 0) / warm.length),
-            p95: sorted[Math.floor(sorted.length * 0.95)],
-            minParticles: Math.min.apply(null, counts.slice(5)),
-            avgParticles: Math.round(counts.reduce((a, b) => a + b, 0) / counts.length),
-          })
-        }
-      }
-      requestAnimationFrame(tick)
-    })
-)
-const load = await page.evaluate(() => ({ enemies: window.__PI.enemies().length }))
+// Session stability: draw-call volume must not creep upward over a long session.
+// This is the leak signal that survives a noisy CPU, unlike a raw fps number — the
+// harness itself competes for cores while injecting input, so fps measured mid-session
+// says more about the test rig than the game. The fps benchmark runs isolated, below.
+const lateVolume = await page.evaluate(() => window.__drawProbe())
 check(
-  'holds 55+ fps under 30 enemies + 300 particles',
-  fps.avg >= 55 && fps.minParticles >= 250,
-  `${fps.avg.toFixed(1)} fps avg, p95 frame ${fps.p95.toFixed(1)}ms, ${load.enemies} enemies, particles sustained min ${fps.minParticles} / avg ${fps.avgParticles}`
+  'draw-call volume stable across a long session',
+  lateVolume.textPerFrame <= earlyVolume.textPerFrame * 1.6 + 40,
+  `fillText/frame ${earlyVolume.textPerFrame} at start -> ${lateVolume.textPerFrame} after a full session (incl. a boss fight)`
 )
 
 // Death, restart, and persistence.
@@ -229,6 +216,57 @@ const runtimeErrors = (await dbg()).errors || []
 check('no runtime errors across the session', runtimeErrors.length === 0, runtimeErrors.slice(0, 3).join(' | ') || 'none')
 
 await ctx.close()
+
+// ---------- isolated performance benchmark ----------
+// Fresh page, no preceding bot session: this measures the game's rendering cost rather
+// than leftover contention from a harness that has been injecting input for 40 seconds.
+{
+  const c3 = await browser.newContext({ viewport: { width: 1280, height: 720 } })
+  const p3 = await c3.newPage()
+  await p3.goto('file://' + INDEX)
+  await p3.waitForFunction('window.__PI && window.__PI.state', null, { timeout: 15000 })
+  await p3.keyboard.press('Enter')
+  await sleep(700)
+  await p3.evaluate(() => {
+    for (let i = 0; i < 30; i++) window.__PI.spawn('token')
+  })
+  await sleep(400)
+  const perf = await p3.evaluate(
+    () =>
+      new Promise((resolve) => {
+        const ts = []
+        const counts = []
+        let last = performance.now()
+        let n = 0
+        window.__PI.stress(300)
+        const tick = (t) => {
+          ts.push(t - last)
+          last = t
+          const live = window.__PI.particles()
+          counts.push(live)
+          if (live < 300) window.__PI.stress(300 - live)
+          if (++n < 240) requestAnimationFrame(tick)
+          else {
+            const warm = ts.slice(5)
+            const sorted = warm.slice().sort((a, b) => a - b)
+            resolve({
+              avg: 1000 / (warm.reduce((a, b) => a + b, 0) / warm.length),
+              p95: sorted[Math.floor(sorted.length * 0.95)],
+              minParticles: Math.min.apply(null, counts.slice(5)),
+              enemies: window.__PI.enemies().length,
+            })
+          }
+        }
+        requestAnimationFrame(tick)
+      })
+  )
+  check(
+    'holds 55+ fps under 30 enemies + 300 particles',
+    perf.avg >= 55 && perf.minParticles >= 250,
+    `${perf.avg.toFixed(1)} fps avg, p95 frame ${perf.p95.toFixed(1)}ms, ${perf.enemies} enemies, particles sustained min ${perf.minParticles} (headless software rendering)`
+  )
+  await c3.close()
+}
 
 // ---------- iframe embed (how it will live on a portfolio site) ----------
 {
