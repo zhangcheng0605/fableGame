@@ -677,18 +677,18 @@ PI.Entities = (function () {
     boss = null;
   }
 
-  function bossLeak(b) {
+  function bossLeak(b, state) {
     if (b.leaked) return;
     b.leaked = true;
     const g = PI.Game;
-    if (g && typeof g.leak === 'function') g.leak(b);
+    if (state === 'PLAYING' && g && typeof g.leak === 'function') g.leak(b);
     clearBossWords(b);
     b.alive = false;
     boss = null;
     beginBreather(wave + 1);
   }
 
-  function updateBoss(dt, udt) {
+  function updateBoss(dt, udt, state) {
     const b = boss;
     if (!b) return;
 
@@ -733,7 +733,7 @@ PI.Entities = (function () {
       if (!e.alive && !e.deathHandled) { handleBossWordDeath(e); if (!boss || boss.dying) return; }
     }
     b.h = livingH;
-    if (b.y + livingH * 0.5 >= LEAK_Y) bossLeak(b);
+    if (b.y + livingH * 0.5 >= LEAK_Y) bossLeak(b, state);
   }
 
   // ------------------------------------------------------------------ per-enemy
@@ -1038,7 +1038,7 @@ PI.Entities = (function () {
       updateEnemy(e, dt, udt, state);
     }
 
-    updateBoss(dt, udt);
+    updateBoss(dt, udt, state);
 
     if (state === 'PLAYING') {
       // Safety net: if Game never called startWave(), start wave 1 anyway.
