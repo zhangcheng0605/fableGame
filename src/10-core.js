@@ -23,7 +23,7 @@ PI.Core = (function () {
   let dpr = 1, dprSeen = 1, scale = 1, offX = 0, offY = 0, cssW = W, cssH = H;
   let needResize = true, rafId = 0, lastT = 0;
 
-  let time = 0, realTime = 0, frame = 0, fps = 60, lastDt = 0;
+  let time = 0, realTime = 0, frame = 0, fps = 60;
   let timeScale = 1, tsFrom = 1, tsHold = 0, tsRampT = 0, tsRampDur = 0;
   let hitstopT = 0;
 
@@ -32,7 +32,7 @@ PI.Core = (function () {
   let punchAmt = 0, punchT = 0, punchDur = 0;
 
   let state = 'TITLE', resumeState = 'PLAYING', pausedByBlur = false;
-  let stateChanges = 0, initialStateFired = false;
+  let initialStateFired = false;
   let hasFocus = true, swallowNext = false, audioKicked = false;
   let overlayHooked = false, overlayFrame = -1;
   let errHooked = false, debugHooked = false;
@@ -285,7 +285,6 @@ PI.Core = (function () {
     const prev = state;
     state = s;
     api.state = s;
-    stateChanges++;
     initialStateFired = true;
     if (s !== 'PAUSED') { pausedByBlur = false; api.pausedByBlur = false; swallowNext = false; }
     if (PI.Game && typeof PI.Game.onState === 'function') PI.Game.onState(prev, s);
@@ -300,7 +299,6 @@ PI.Core = (function () {
     swallowNext = true;               // §14: the resuming keystroke is swallowed
     state = 'PAUSED';
     api.state = state;
-    stateChanges++;
     if (PI.Game && typeof PI.Game.onState === 'function') PI.Game.onState('PLAYING', 'PAUSED');
   }
 
@@ -497,7 +495,6 @@ PI.Core = (function () {
     const camDt = stopped ? 0 : raw;
 
     time += dt;
-    lastDt = dt;
     updateCamera(camDt);
 
     api.dt = dt; api.time = time; api.realTime = realTime;
