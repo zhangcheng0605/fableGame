@@ -220,6 +220,59 @@ This is the polish that makes the 15-second GIF. All of it is required, none opt
 **Screen shake rule:** all shakes are trauma-based (accumulate a 0–1 trauma value, shake
 offset = trauma² × max), so overlapping events feel escalating rather than jittery.
 
+### 11.5 Motion Design — the Wow Pass (required, not optional)
+
+The game must feel *choreographed*, not just functional. These are contractual:
+
+**Global easing law:** nothing on screen ever moves or appears linearly. Every UI element,
+banner, popup, and menu item animates with cubic ease-out (or spring where noted). Numbers
+never snap — score and integrity **tween/count** to their new values (score counts up over
+300ms; integrity bar drains with a 200ms lag "ghost bar" in white showing what was just lost,
+fighting-game style).
+
+**Title screen:** the logo `PROMPT INJECTION` assembles itself — its letters fall from the
+top as glyph particles and lock into place one by one (staggered 40ms, each with a landing
+micro-shake and spark). Subtitle `TYPE TO DEFEND` pulses on a slow breathing curve. The
+background code-rain is already running, so the world feels alive before input.
+
+**Enemy spawn:** enemies don't pop in — they **materialize**: 6–10 stray glyphs converge
+into position over 250ms and snap into the word with a small flash. (Pooled particles;
+reuse the kill-explosion system in reverse.)
+
+**Wave banner:** `WAVE N` appears with a **text-decode effect** — characters scramble
+through random glyphs and resolve left-to-right over 400ms, hold 1s, then slide out with
+motion blur (3 ghost trails).
+
+**Combo counter:** squash-and-stretch on every increment (spring scale 1.0→1.35→1.0);
+at each multiplier tier the counter changes color and emits a ring pulse. On combo break
+it physically **cracks and falls** (splits into 2–3 shards that drop with gravity).
+
+**Boss choreography:**
+- *Intro (1.2s):* gameplay slows to 30% speed, canvas zooms in 8% (punch-in), a red alert
+  sweep crosses the screen, klaxon, banner decodes in, then a speed-ramp back to 100%.
+- *Per-word kill:* 80ms hitstop → white flash on the word → the whole phrase recoils upward
+  with an elastic overshoot.
+- *Death (2s):* full white flash (2 frames) → expanding shockwave ring that visibly **bends
+  the background** (radial displacement of the code-rain layers) → slow-mo letter rain of
+  the entire phrase → integrity refill animates as green text being re-typed into the
+  context bar, with a blinking cursor.
+
+**Laser & turret feel:** lasers are gradient-bloom beams (bright core, soft additive glow)
+with 30ms fade; the turret recoils 3px per shot and rotates toward targets with a smoothed
+spring (never snaps). During FLOW STATE the turret trails afterimages.
+
+**Reactive background:** the code-rain parallax speed and hue subtly track the combo
+multiplier (calm blue-green at ×1 → faster, cyan-shifted at ×8), so the whole screen
+escalates with player skill even before FLOW STATE's tint.
+
+**Context bar life:** the green terminal text in the integrity bar has a blinking block
+cursor at its end. Damage doesn't just recolor a slice — it plays a 150ms **glitch-slice**
+(horizontal displacement bands + character corruption) at the impact point.
+
+**Performance guardrail:** all of the above must hold 60fps under §14's load test. Effects
+are layered on the existing particle pool and canvas transforms — no filters that force
+GPU readbacks (no `ctx.filter` blur in hot paths; fake bloom with layered radial gradients).
+
 ---
 
 ## 12. Content: Word Pools
