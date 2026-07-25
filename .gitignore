@@ -1,0 +1,3 @@
+node_modules
+tools/shots/*.webm
+tools/qa/tmp/
